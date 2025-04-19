@@ -14,6 +14,14 @@ struct MapObject {
     Color color;     // Object color for rendering
 };
 
+// New structure for the falling rectangle
+struct FallingRectangle {
+    Rectangle rect;       // Position and size
+    Vector2 velocity;     // Movement velocity
+    bool isGrounded;      // Flag to indicate if touching an object
+    Color color;          // Rectangle color
+};
+
 int main()
 {
     // Initialize window
@@ -21,6 +29,18 @@ int main()
     const int screenHeight = 960; // Reduced from 960 to 800
     InitWindow(screenWidth, screenHeight, "LazyJumper v3");
     SetTargetFPS(60);
+
+    // Camera setup for following player (later)
+    const float cameraOffsetX = screenWidth / 2.0f;
+    const float cameraOffsetY = screenHeight / 2.0f;
+    Camera2D camera = { 0 };
+    camera.target = { 0, 0 };
+    camera.offset = { cameraOffsetX, cameraOffsetY };
+    camera.rotation = 0.0f;
+    camera.zoom = 1.0f;
+    
+    // Camera control parameters
+    float cameraSpeed = 500.0f;      // Speed of camera movement
 
     // Load the map with Tileson
     tson::Tileson parser;
@@ -104,23 +124,9 @@ int main()
     for (auto& layer : map->getLayers()) {
         if (layer.getType() == tson::LayerType::ObjectGroup) {
             const auto& objects = layer.getObjects();
+
             // Get layer color if specified (for debugging visualization)
             Color layerColor = RED;
-            
-            // Access the color property directly from the layer's properties
-            // if (layer.hasProperty("color")) {
-            //     std::string colorStr = layer.getProperty("color").getValue<std::string>();
-            //     if (colorStr.length() > 0 && colorStr[0] == '#') {
-            //         colorStr = colorStr.substr(1); // Remove # prefix
-            //         unsigned int colorHex = std::stoul(colorStr, nullptr, 16);
-            //         layerColor = {
-            //             static_cast<unsigned char>((colorHex >> 16) & 0xFF),
-            //             static_cast<unsigned char>((colorHex >> 8) & 0xFF),
-            //             static_cast<unsigned char>(colorHex & 0xFF),
-            //             255
-            //         };
-            //     }
-            // }
             
             std::cout << "Loading object layer: " << layer.getName() << " with " 
                       << objects.size() << " objects" << std::endl;
@@ -130,8 +136,8 @@ int main()
                 mapObject.name = object.getName();
                 mapObject.type = object.getType();
                 mapObject.rect = {
-                    static_cast<float>(object.getPosition().x),
-                    static_cast<float>(object.getPosition().y),
+                    static_cast<float>(object.getPosition().x - cameraOffsetX),
+                    static_cast<float>(object.getPosition().y - cameraOffsetY),
                     static_cast<float>(object.getSize().x),
                     static_cast<float>(object.getSize().y)
                 };
@@ -146,17 +152,15 @@ int main()
         }
     }
     
-    // Camera setup for following player (later)
-    const float cameraOffsetX = screenWidth / 2.0f;
-    const float cameraOffsetY = screenHeight / 2.0f;
-    Camera2D camera = { 0 };
-    camera.target = { 0, 0 };
-    camera.offset = { cameraOffsetX, cameraOffsetY };
-    camera.rotation = 0.0f;
-    camera.zoom = 1.0f;
+    // Initialize the falling rectangle
+    FallingRectangle player;
+    player.rect = { 0, -100, 40.0f, 40.0f };
+    player.velocity = { 0.0f, 0.0f };
+    player.isGrounded = false;
+    player.color = BLUE;
     
-    // Camera control parameters
-    float cameraSpeed = 500.0f;      // Speed of camera movement
+    // Physics constants
+    const float gravity = 10.0f; // Pixels per second squared
     
     // Game loop
     while (!WindowShouldClose())
@@ -169,6 +173,33 @@ int main()
         if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) camera.target.x -= cameraSpeed * deltaTime;
         if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) camera.target.y += cameraSpeed * deltaTime;
         if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) camera.target.y -= cameraSpeed * deltaTime;
+        
+        // Update falling rectangle
+        if (!player.isGrounded) {
+            // Apply gravity
+            player.velocity.y += gravity * deltaTime;
+            
+            // Update position
+            player.rect.y += player.velocity.y * deltaTime;
+            
+            // Convert player rectangle to world coordinates for collision detection
+            Rectangle playerWorldRect = {
+                player.rect.x,
+                player.rect.y,
+                player.rect.width,
+                player.rect.height
+            };
+            
+            // Check for collisions with map objects
+            for (const auto& object : mapObjects) {
+                if (CheckCollisionRecs(playerWorldRect, object.rect)) {
+                    // Collision detected, stop falling
+                    player.isGrounded = true;
+                    player.velocity.y = 0.0f;
+                    break;
+                }
+            }
+        }
         
         // Store camera position for parallax calculations
         float cameraX = camera.target.x;
@@ -282,8 +313,8 @@ int main()
         for (const auto& object : mapObjects) {
             // Calculate the actual position taking into account the camera position
             Rectangle drawRect = {
-                object.rect.x - cameraOffsetX,
-                object.rect.y - cameraOffsetY,
+                object.rect.x,
+                object.rect.y,
                 object.rect.width,
                 object.rect.height
             };
@@ -301,12 +332,17 @@ int main()
                     20, WHITE);
         }
         
+        // Draw the falling rectangle
+        DrawRectangleRec(player.rect, player.color);
+        
         EndMode2D();
         
         // Draw UI or debug info here
         DrawFPS(10, 10);
         DrawText(TextFormat("Camera: %.2f, %.2f", camera.target.x, camera.target.y), 10, 30, 20, BLACK);
         DrawText("Controls: WASD/Arrows - Move", 10, screenHeight - 30, 20, DARKGRAY);
+        DrawText(TextFormat("Player: %.2f, %.2f %s", player.rect.x, player.rect.y, 
+                player.isGrounded ? "(Grounded)" : "(Falling)"), 10, 50, 20, BLACK);
         
         EndDrawing();
     }
