@@ -6,6 +6,14 @@
 #include <string>
 #include <filesystem>
 
+// New structure to represent map objects
+struct MapObject {
+    std::string name;
+    std::string type;
+    Rectangle rect;  // Stores x, y, width, height
+    Color color;     // Object color for rendering
+};
+
 int main()
 {
     // Initialize window
@@ -88,6 +96,53 @@ int main()
             layerInfo.repeatX = layer.hasRepeatX();
             
             imageLayers.push_back(layerInfo);
+        }
+    }
+    
+    // Load objects from object layers
+    std::vector<MapObject> mapObjects;
+    for (auto& layer : map->getLayers()) {
+        if (layer.getType() == tson::LayerType::ObjectGroup) {
+            const auto& objects = layer.getObjects();
+            // Get layer color if specified (for debugging visualization)
+            Color layerColor = RED;
+            
+            // Access the color property directly from the layer's properties
+            // if (layer.hasProperty("color")) {
+            //     std::string colorStr = layer.getProperty("color").getValue<std::string>();
+            //     if (colorStr.length() > 0 && colorStr[0] == '#') {
+            //         colorStr = colorStr.substr(1); // Remove # prefix
+            //         unsigned int colorHex = std::stoul(colorStr, nullptr, 16);
+            //         layerColor = {
+            //             static_cast<unsigned char>((colorHex >> 16) & 0xFF),
+            //             static_cast<unsigned char>((colorHex >> 8) & 0xFF),
+            //             static_cast<unsigned char>(colorHex & 0xFF),
+            //             255
+            //         };
+            //     }
+            // }
+            
+            std::cout << "Loading object layer: " << layer.getName() << " with " 
+                      << objects.size() << " objects" << std::endl;
+                      
+            for (const auto& object : objects) {
+                MapObject mapObject;
+                mapObject.name = object.getName();
+                mapObject.type = object.getType();
+                mapObject.rect = {
+                    static_cast<float>(object.getPosition().x),
+                    static_cast<float>(object.getPosition().y),
+                    static_cast<float>(object.getSize().x),
+                    static_cast<float>(object.getSize().y)
+                };
+                mapObject.color = layerColor;
+                mapObjects.push_back(mapObject);
+                
+                std::cout << "  - Loaded object: " << mapObject.name 
+                          << " at (" << mapObject.rect.x << "," << mapObject.rect.y 
+                          << ") with size " << mapObject.rect.width << "x" << mapObject.rect.height 
+                          << std::endl;
+            }
         }
     }
     
@@ -221,6 +276,29 @@ int main()
                     }
                 }
             }
+        }
+        
+        // Render objects
+        for (const auto& object : mapObjects) {
+            // Calculate the actual position taking into account the camera position
+            Rectangle drawRect = {
+                object.rect.x - cameraOffsetX,
+                object.rect.y - cameraOffsetY,
+                object.rect.width,
+                object.rect.height
+            };
+            
+            // For debugging, draw rectangles with outlines and fill with semi-transparent color
+            Color fillColor = object.color;
+            fillColor.a = 100; // Make it semi-transparent
+            DrawRectangleRec(drawRect, fillColor);
+            DrawRectangleLinesEx(drawRect, 2, object.color);
+            
+            // Draw object name for debugging
+            DrawText(object.name.c_str(), 
+                    drawRect.x + 5, 
+                    drawRect.y + 5, 
+                    20, WHITE);
         }
         
         EndMode2D();
