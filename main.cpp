@@ -14,19 +14,38 @@ struct MapObject {
     Color color;     // Object color for rendering
 };
 
+// Character animation states
+enum CharacterState {
+    IDLE,
+    WALKING,
+    JUMPING
+};
+
 // New structure for the falling rectangle
-struct FallingRectangle {
+struct Character {
     Rectangle rect;       // Position and size
     Vector2 velocity;     // Movement velocity
     bool isGrounded;      // Flag to indicate if touching an object
     Color color;          // Rectangle color
+    float moveSpeed;      // Horizontal movement speed
+    float jumpForce;      // Force applied when jumping
+    bool facingRight;     // Direction the character is facing
+    
+    // Animation properties
+    CharacterState state;
+    int frameCount;       // Total frames in current animation
+    int currentFrame;     // Current frame of animation
+    float frameWidth;     // Width of a single frame
+    float frameHeight;    // Height of a single frame
+    float frameTime;      // Time for each frame
+    float frameTimer;     // Timer for current frame
 };
 
 int main()
 {
     // Initialize window
     const int screenWidth = 1440;
-    const int screenHeight = 960; // Reduced from 960 to 800
+    const int screenHeight = 960; 
     InitWindow(screenWidth, screenHeight, "LazyJumper v3");
     SetTargetFPS(60);
 
@@ -152,15 +171,36 @@ int main()
         }
     }
     
-    // Initialize the falling rectangle
-    FallingRectangle player;
+    // Initialize the character
+    Character player;
     player.rect = { 0, -100, 40.0f, 40.0f };
     player.velocity = { 0.0f, 0.0f };
     player.isGrounded = false;
     player.color = BLUE;
+    player.moveSpeed = 200.0f;      // Pixels per second
+    player.jumpForce = 400.0f;      // Jump velocity
+    player.facingRight = true;      // Start facing right
+    player.state = IDLE;            // Start in idle state
+    player.frameCount = 4;          // Idle animation has 4 frames
+    player.currentFrame = 0;        // Start with first frame
+    player.frameWidth = 32.0f;      // Width of a single frame
+    player.frameHeight = 32.0f;     // Height of a single frame
+    player.frameTime = 0.1f;        // 10 FPS animation
+    player.frameTimer = 0.0f;       // Initialize timer
+    
+    // Load character sprite sheets
+    Texture2D idleTexture = LoadTexture("main_character/idle.png");
+    Texture2D walkTexture = LoadTexture("main_character/walk.png");
+    Texture2D jumpTexture = LoadTexture("main_character/jump.png");
+    
+    // Create variables to track jump animation state
+    int jumpRiseFrames = 3;     // Frames 0-2 for rising
+    int jumpPeakFrames = 2;     // Frames 3-4 for peak
+    int jumpFallFrames = 3;     // Frames 5-7 for falling
     
     // Physics constants
     const float gravity = 10.0f; // Pixels per second squared
+    const float friction = 0.8f; // Horizontal movement friction
     
     // Game loop
     while (!WindowShouldClose())
@@ -168,21 +208,104 @@ int main()
         // Update camera controls
         float deltaTime = GetFrameTime();
         
-        // Camera movement with WASD or arrow keys
-        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) camera.target.x += cameraSpeed * deltaTime;
-        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) camera.target.x -= cameraSpeed * deltaTime;
-        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) camera.target.y += cameraSpeed * deltaTime;
-        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) camera.target.y -= cameraSpeed * deltaTime;
+        // Update animation timer
+        player.frameTimer += deltaTime;
+        if (player.frameTimer >= player.frameTime) {
+            player.frameTimer = 0.0f;
+            player.currentFrame = (player.currentFrame + 1) % player.frameCount;
+        }
         
-        // Update falling rectangle
+        // Determine character state
+        CharacterState previousState = player.state;
+        
         if (!player.isGrounded) {
-            // Apply gravity
-            player.velocity.y += gravity * deltaTime;
+            // Player is jumping or falling
+            player.state = JUMPING;
             
-            // Update position
-            player.rect.y += player.velocity.y * deltaTime;
+            // Handle jump animation phases based on vertical velocity
+            if (player.velocity.y < -5.0f) {
+                // Rising phase - frames 0-2
+                int frameInPhase = (int)(player.frameTimer / player.frameTime) % jumpRiseFrames;
+                player.currentFrame = frameInPhase;
+            } 
+            else if (player.velocity.y >= -5.0f && player.velocity.y <= 5.0f) {
+                // Peak phase - frames 3-4
+                int frameInPhase = (int)(player.frameTimer / player.frameTime) % jumpPeakFrames;
+                player.currentFrame = jumpRiseFrames + frameInPhase;
+            }
+            else {
+                // Falling phase - frames 5-7
+                int frameInPhase = (int)(player.frameTimer / player.frameTime) % jumpFallFrames;
+                player.currentFrame = jumpRiseFrames + jumpPeakFrames + frameInPhase;
+            }
             
-            // Convert player rectangle to world coordinates for collision detection
+            // Don't increment frame normally for jumping
+            player.frameTimer += deltaTime;
+        } 
+        else if (fabsf(player.velocity.x) > 5.0f) {
+            // Player is walking (if moving faster than a threshold)
+            player.state = WALKING;
+            player.frameCount = 6; // Walk animation has 6 frames
+            
+            // Update animation frame
+            player.frameTimer += deltaTime;
+            if (player.frameTimer >= player.frameTime) {
+                player.frameTimer = 0.0f;
+                player.currentFrame = (player.currentFrame + 1) % player.frameCount;
+            }
+        } 
+        else {
+            // Player is idle
+            player.state = IDLE;
+            player.frameCount = 4; // Idle animation has 4 frames
+            
+            // Update animation frame
+            player.frameTimer += deltaTime;
+            if (player.frameTimer >= player.frameTime) {
+                player.frameTimer = 0.0f;
+                player.currentFrame = (player.currentFrame + 1) % player.frameCount;
+            }
+        }
+        
+        // Reset animation if state changed
+        if (previousState != player.state) {
+            player.currentFrame = 0;
+            player.frameTimer = 0.0f;
+        }
+        
+        // Player movement controls
+        // Reset horizontal velocity with some friction to slow down
+        player.velocity.x *= friction;
+        
+        // Left and right movement
+        if (IsKeyDown(KEY_RIGHT)) {
+            player.velocity.x = player.moveSpeed;
+            player.facingRight = true;
+        }
+        if (IsKeyDown(KEY_LEFT)) {
+            player.velocity.x = -player.moveSpeed;
+            player.facingRight = false;
+        }
+        
+        // Jumping (only when grounded)
+        if (IsKeyPressed(KEY_UP) && player.isGrounded) {
+            player.velocity.y = -player.jumpForce;
+            player.isGrounded = false;
+        }
+        
+        // Apply gravity when not grounded
+        if (!player.isGrounded) {
+            player.velocity.y += gravity;
+        }
+        
+        // Update player position
+        player.rect.x += player.velocity.x * deltaTime;
+        player.rect.y += player.velocity.y * deltaTime;
+        
+        // Check for collisions with map objects
+        player.isGrounded = false; // Reset grounded state
+        
+        for (const auto& object : mapObjects) {
             Rectangle playerWorldRect = {
                 player.rect.x,
                 player.rect.y,
@@ -190,20 +313,47 @@ int main()
                 player.rect.height
             };
             
-            // Check for collisions with map objects
-            for (const auto& object : mapObjects) {
-                if (CheckCollisionRecs(playerWorldRect, object.rect)) {
-                    // Collision detected, stop falling
-                    player.isGrounded = true;
-                    player.velocity.y = 0.0f;
-                    break;
+            if (CheckCollisionRecs(playerWorldRect, object.rect)) {
+                // Simple collision resolution - can be improved
+                // Bottom collision (landing)
+                if (((player.velocity.y > 0 && 
+                    player.rect.y + player.rect.height > object.rect.y &&
+                    player.rect.y < object.rect.y) || 
+                   (abs(player.rect.y + player.rect.height - object.rect.y) < 5.0f)) && // Increased tolerance
+                  // Check horizontal overlap to ensure player is above the platform
+                  player.rect.x + player.rect.width > object.rect.x + 2.0f &&
+                  player.rect.x < object.rect.x + object.rect.width - 2.0f) {
+                  
+                  // Position player slightly above the ground to prevent sinking
+                //   player.rect.y = object.rect.y - player.rect.height - 0.1f;
+                  player.velocity.y = 0;
+                  player.isGrounded = true;
+              }
+                
+                // Basic horizontal collision
+                if (player.velocity.x > 0 && 
+                    player.rect.x + player.rect.width > object.rect.x &&
+                    player.rect.x < object.rect.x) {
+                    player.rect.x = object.rect.x - player.rect.width;
+                    player.velocity.x = 0;
+                }
+                
+                if (player.velocity.x < 0 && 
+                    player.rect.x < object.rect.x + object.rect.width &&
+                    player.rect.x + player.rect.width > object.rect.x + object.rect.width) {
+                    player.rect.x = object.rect.x + object.rect.width;
+                    player.velocity.x = 0;
                 }
             }
         }
         
+        // Make camera follow player horizontally only
+        camera.target.x = player.rect.x;
+        // Camera y position stays independent of player jumps
+        
         // Store camera position for parallax calculations
         float cameraX = camera.target.x;
-        float cameraY = camera.target.y; // Store Y position for Y-axis parallax
+        float cameraY = camera.target.y;
         
         // Begin drawing
         BeginDrawing();
@@ -310,39 +460,64 @@ int main()
         }
         
         // Render objects
-        for (const auto& object : mapObjects) {
-            // Calculate the actual position taking into account the camera position
-            Rectangle drawRect = {
-                object.rect.x,
-                object.rect.y,
-                object.rect.width,
-                object.rect.height
-            };
+        // for (const auto& object : mapObjects) {
+        //     // Calculate the actual position taking into account the camera position
+        //     Rectangle drawRect = {
+        //         object.rect.x,
+        //         object.rect.y,
+        //         object.rect.width,
+        //         object.rect.height
+        //     };
             
-            // For debugging, draw rectangles with outlines and fill with semi-transparent color
-            Color fillColor = object.color;
-            fillColor.a = 100; // Make it semi-transparent
-            DrawRectangleRec(drawRect, fillColor);
-            DrawRectangleLinesEx(drawRect, 2, object.color);
+        //     // For debugging, draw rectangles with outlines and fill with semi-transparent color
+        //     Color fillColor = object.color;
+        //     fillColor.a = 100; // Make it semi-transparent
+        //     DrawRectangleRec(drawRect, fillColor);
+        //     DrawRectangleLinesEx(drawRect, 2, object.color);
             
-            // Draw object name for debugging
-            DrawText(object.name.c_str(), 
-                    drawRect.x + 5, 
-                    drawRect.y + 5, 
-                    20, WHITE);
+        //     // Draw object name for debugging
+        //     DrawText(object.name.c_str(), 
+        //             drawRect.x + 5, 
+        //             drawRect.y + 5, 
+        //             20, WHITE);
+        // }
+        
+        // Draw the player character using sprites instead of rectangle
+        Texture2D currentTexture;
+        switch (player.state) {
+            case IDLE: currentTexture = idleTexture; break;
+            case WALKING: currentTexture = walkTexture; break;
+            case JUMPING: currentTexture = jumpTexture; break;
         }
         
-        // Draw the falling rectangle
-        DrawRectangleRec(player.rect, player.color);
+        // Rectangle for source (which part of the texture to draw)
+        Rectangle source = {
+            player.currentFrame * player.frameWidth,
+            0,
+            player.facingRight ? player.frameWidth : -player.frameWidth,
+            player.frameHeight
+        };
+        
+        // Rectangle for destination (where to draw it in the world)
+        Rectangle dest = {
+            player.rect.x,
+            player.rect.y,
+            player.rect.width,
+            player.rect.height
+        };
+        
+        // Draw the sprite
+        Vector2 origin = { 0, 0 };
+        DrawTexturePro(currentTexture, source, dest, origin, 0.0f, WHITE);
         
         EndMode2D();
         
         // Draw UI or debug info here
         DrawFPS(10, 10);
         DrawText(TextFormat("Camera: %.2f, %.2f", camera.target.x, camera.target.y), 10, 30, 20, BLACK);
-        DrawText("Controls: WASD/Arrows - Move", 10, screenHeight - 30, 20, DARKGRAY);
+        DrawText("Controls: LEFT/RIGHT - Move, UP - Jump", 10, screenHeight - 30, 20, DARKGRAY);
         DrawText(TextFormat("Player: %.2f, %.2f %s", player.rect.x, player.rect.y, 
-                player.isGrounded ? "(Grounded)" : "(Falling)"), 10, 50, 20, BLACK);
+                player.isGrounded ? "(Grounded)" : "(In air)"), 10, 50, 20, BLACK);
         
         EndDrawing();
     }
@@ -355,6 +530,11 @@ int main()
     for (auto& imageLayer : imageLayers) {
         UnloadTexture(imageLayer.texture);
     }
+    
+    // Unload character textures
+    UnloadTexture(idleTexture);
+    UnloadTexture(walkTexture);
+    UnloadTexture(jumpTexture);
     
     CloseWindow();
     return 0;
