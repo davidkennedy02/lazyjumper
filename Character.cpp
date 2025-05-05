@@ -12,8 +12,16 @@ Character::Character() {
     bool droppingThrough = false;
     color = BLUE;
     moveSpeed = 200.0f;      // Pixels per second
+    runningSpeed = 350.0f; // Speed when running
     jumpForce = 550.0f;      // Jump velocity
     facingRight = true;      // Start facing right
+    
+    // Initialize lazy jump mechanics
+    jumpRequested = false;
+    jumpRequestTime = 0.0f;
+    jumpDelay = 0.5f;        // 0.5 second delay for lazy jumper
+    jumpBuffered = false;    // Initialize buffered jump flag
+    
     state = IDLE;            // Start in idle state
     frameCount = 4;          // Idle animation has 4 frames
     currentFrame = 0;        // Start with first frame
@@ -22,23 +30,62 @@ Character::Character() {
     frameTime = 0.1f;        // 10 FPS animation
     frameTimer = 0.0f;       // Initialize timer
 
+    // Initialise running mechanics
+    lastLeftTapTime = 0.0f;
+    lastRightTapTime = 0.0f;
+    doubleTapTimeThreshold = 0.2f; // Time threshold for double tap
+    isRunning = false; // Start not running
+
     jumpRiseFrames = 3;
     jumpPeakFrames = 2;
     jumpFallFrames = 3;
+
+    // Death animation properties
+    isDeathAnimationComplete = false;
+    deathFrameCount = 8;  // Death animation has 8 frames
+    isDead = false;       // Start alive
 }
 
-void Character::SetTextures(Texture2D idle, Texture2D walk, Texture2D jump) {
+void Character::SetTextures(Texture2D idle, Texture2D walk, Texture2D run, Texture2D jump, Texture2D death) {
     idleTexture = idle;
     walkTexture = walk;
+    runTexture = run;
     jumpTexture = jump;
+    deathTexture = death;
 }
 
 void Character::Update(float deltaTime) {
     // Update animation timer
     frameTimer += deltaTime;
-    if (frameTimer >= frameTime) {
-        frameTimer = 0.0f;
-        currentFrame = (currentFrame + 1) % frameCount;
+    
+    // Process lazy jump if requested
+    if (jumpRequested && isGrounded) {
+        float currentTime = GetTime();
+        if (currentTime - jumpRequestTime >= jumpDelay) {
+            // Time to execute the jump after delay
+            velocity.y = -jumpForce;
+            isGrounded = false;
+            jumpRequested = false; // Reset jump request
+            jumpBuffered = false;  // Reset buffered jump flag
+            
+            // Play jump sound when jump is executed
+            PlaySound(jumpSound);
+        }
+    }
+    
+    // Handle death animation separately
+    if (state == DYING) {
+        if (frameTimer >= frameTime) {
+            frameTimer = 0.0f;
+            currentFrame++;
+            
+            // Check if death animation is complete
+            if (currentFrame >= deathFrameCount) {
+                isDeathAnimationComplete = true;
+                currentFrame = deathFrameCount - 1; // Stay on last frame
+            }
+        }
+        return; // Skip other state updates if dying
     }
     
     // Determine character state
@@ -67,8 +114,12 @@ void Character::Update(float deltaTime) {
     } 
     else if (fabsf(velocity.x) > 5.0f) {
         // Player is walking (if moving faster than a threshold)
-        state = WALKING;
-        frameCount = 6; // Walk animation has 6 frames
+        if (isRunning) {
+            state = RUNNING;
+        } else {
+            state = WALKING;
+        }
+        frameCount = 6; // Walk and run animations have 6 frames
     } 
     else {
         // Player is idle
@@ -83,27 +134,71 @@ void Character::Update(float deltaTime) {
     }
 }
 
-void Character::HandleInput() {
-    // Left and right movement
-    if (IsKeyDown(KEY_RIGHT)) {
-        velocity.x = moveSpeed;
-        facingRight = true;
+void Character::SetDying() {
+    if (!isDead) {
+        state = DYING;
+        isDead = true;
+        isDeathAnimationComplete = false;
+        currentFrame = 0;
+        frameTimer = 0.0f;
+        velocity = { 0, 0 }; // Stop movement
     }
-    if (IsKeyDown(KEY_LEFT)) {
-        velocity.x = -moveSpeed;
-        facingRight = false;
+}
+
+void Character::HandleInput() {
+    // Skip input handling if character is dead
+    if (isDead) return;
+
+    float currentTime = GetTime();
+
+    // Check for right key double-tap
+    if (IsKeyPressed(KEY_RIGHT)) {
+        if (currentTime - lastRightTapTime < doubleTapTimeThreshold) {
+            // Double tap detected
+            isRunning = true;
+        }
+        lastRightTapTime = currentTime;
     }
     
-    // Jumping (only when grounded)
-    if (IsKeyPressed(KEY_UP) && isGrounded) {
-        velocity.y = -jumpForce;
-        isGrounded = false;
+    // Check for left key double-tap
+    if (IsKeyPressed(KEY_LEFT)) {
+        if (currentTime - lastLeftTapTime < doubleTapTimeThreshold) {
+            // Double tap detected
+            isRunning = true;
+        }
+        lastLeftTapTime = currentTime;
+    }
+
+    // Handle movement based on current input and running state
+    if (IsKeyDown(KEY_RIGHT)) {
+        velocity.x = isRunning ? runningSpeed : moveSpeed;
+        facingRight = true;
+    }
+    else if (IsKeyDown(KEY_LEFT)) {
+        velocity.x = isRunning ? -runningSpeed : -moveSpeed;
+        facingRight = false;
+    }
+    else {
+        // Reset running state if no movement keys are pressed
+        isRunning = false;
+    }
+    
+    // Request jumping (allow request even when in air)
+    if (IsKeyPressed(KEY_UP) && !jumpRequested) {
+        jumpRequested = true;
+        jumpRequestTime = currentTime; // Record when jump was requested
+        if (!isGrounded) {
+            jumpBuffered = true; // Mark this as a buffered jump (requested while in air)
+        }
     }
 
     droppingThrough = IsKeyDown(KEY_DOWN) && isGrounded;
 }
 
 void Character::ApplyPhysics(float deltaTime, float gravity, float friction) {
+    // Skip physics if dying
+    if (state == DYING) return;
+
     // Apply friction to horizontal movement
     velocity.x *= friction;
     
@@ -119,9 +214,17 @@ void Character::ApplyPhysics(float deltaTime, float gravity, float friction) {
     // Update position
     rect.x += velocity.x * deltaTime;
     rect.y += velocity.y * deltaTime;
+
+    const float leftBound = -GetScreenWidth() / 2.0f; // Left boundary
+
+    if (rect.x < leftBound) {
+        rect.x = leftBound; // Prevent going off-screen to the left
+        velocity.x = 0; // Stop horizontal movement
+    }
 }
 
 void Character::CheckCollisions(const std::vector<MapObject>& objects) {
+    bool wasGrounded = isGrounded; // Store previous grounded state
     isGrounded = false; // Reset grounded state
 
     const float groundCheckDistance = 2.0f;
@@ -209,9 +312,24 @@ void Character::CheckCollisions(const std::vector<MapObject>& objects) {
         }
     }
 
+    // Check if we just landed and have a buffered jump
+    if (!wasGrounded && isGrounded && jumpBuffered) {
+        // We've landed with a buffered jump request
+        // Keep the jumpRequested flag true, but reset the timer to now
+        // This ensures we honor the jump but still have the lazy delay
+        jumpRequestTime = GetTime();
+        jumpBuffered = false; // No longer a buffered jump
+    }
+
+    // Don't cancel jump requests when airborne anymore
+    // The old code was:
+    // if (!isGrounded && jumpRequested) {
+    //     jumpRequested = false;
+    // }
+
     if (droppingThrough && isGrounded) {
         // Drop through the platform
-        velocity.y = 50.0f; // Small downward velocity to drop through
+        velocity.y = 100.0f; // Small downward velocity to drop through
         isGrounded = false; // Reset grounded state
     }
 }
@@ -222,7 +340,9 @@ void Character::Render() {
     switch (state) {
         case IDLE: currentTexture = idleTexture; break;
         case WALKING: currentTexture = walkTexture; break;
+        case RUNNING: currentTexture = runTexture; break;
         case JUMPING: currentTexture = jumpTexture; break;
+        case DYING: currentTexture = deathTexture; break;
     }
     
     // Rectangle for source (which part of the texture to draw)
@@ -244,4 +364,20 @@ void Character::Render() {
     // Draw the sprite
     Vector2 origin = { 0, 0 };
     DrawTexturePro(currentTexture, source, dest, origin, 0.0f, WHITE);
+}
+
+// Reset character to starting position
+void Character::Reset() {
+    rect = { 0, 88, 32.0f, 32.0f };
+    velocity = { 0.0f, 0.0f };
+    isGrounded = true;
+    isDead = false;
+    isDeathAnimationComplete = false;
+    state = IDLE;
+    facingRight = true;
+    isRunning = false;
+    currentFrame = 0;
+    frameTimer = 0.0f;
+    jumpRequested = false;
+    jumpBuffered = false;
 }
